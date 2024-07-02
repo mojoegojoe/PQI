@@ -1,0 +1,119 @@
+{
+    "values": [
+        "1"
+    ],
+    "quantum_output": {
+        "backend_name": "qasm_simulator",
+        "backend_version": "0.14.1",
+        "date": "2024-05-29T23:21:24.261790",
+        "header": null,
+        "qobj_id": "c0b91848-4d49-41ab-8bd1-fb8639ee19c5",
+        "job_id": "8b581091-4c0e-4e09-b0fb-72c5699cb29f",
+        "status": "COMPLETED",
+        "success": true,
+        "results": [
+            {
+                "shots": 1024,
+                "success": true,
+                "data": {
+                    "counts": {
+                        "0x2": 264,
+                        "0x3": 249,
+                        "0x0": 249,
+                        "0x1": 262
+                    }
+                },
+                "meas_level": 2,
+                "header": {
+                    "clbit_labels": [
+                        [
+                            "c",
+                            0
+                        ],
+                        [
+                            "c",
+                            1
+                        ]
+                    ],
+                    "creg_sizes": [
+                        [
+                            "c",
+                            2
+                        ]
+                    ],
+                    "global_phase": 0.0,
+                    "memory_slots": 2,
+                    "metadata": {},
+                    "n_qubits": 2,
+                    "name": "circuit-164",
+                    "qreg_sizes": [
+                        [
+                            "q",
+                            2
+                        ]
+                    ],
+                    "qubit_labels": [
+                        [
+                            "q",
+                            0
+                        ],
+                        [
+                            "q",
+                            1
+                        ]
+                    ]
+                },
+                "status": "DONE",
+                "circ_id": 0,
+                "seed_simulator": 410502275,
+                "metadata": {
+                    "batched_shots_optimization": false,
+                    "required_memory_mb": 0,
+                    "method": "stabilizer",
+                    "active_input_qubits": [
+                        0,
+                        1
+                    ],
+                    "device": "CPU",
+                    "remapped_qubits": false,
+                    "num_qubits": 2,
+                    "num_clbits": 2,
+                    "time_taken": 0.0048635,
+                    "sample_measure_time": 0.0008473,
+                    "input_qubit_map": [
+                        [
+                            0,
+                            0
+                        ],
+                        [
+                            1,
+                            1
+                        ]
+                    ],
+                    "max_memory_mb": 16298,
+                    "measure_sampling": true,
+                    "noise": "ideal",
+                    "parallel_shots": 1,
+                    "parallel_state_update": 12,
+                    "runtime_parameter_bind": false,
+                    "num_bind_params": 1,
+                    "fusion": {
+                        "enabled": false
+                    }
+                },
+                "time_taken": 0.0048635
+            }
+        ],
+        "metadata": {
+            "omp_enabled": true,
+            "parallel_experiments": 1,
+            "max_memory_mb": 16298,
+            "max_gpu_memory_mb": 0,
+            "time_taken": 0.005203,
+            "time_taken_execute": 0.0049342,
+            "time_taken_load_qobj": 0.0002278
+        },
+        "time_taken": 0.0049326419830322266
+    },
+    "quantum_tree_output": "2, 3, 0, 1, , , , , "
+}
