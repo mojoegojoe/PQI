@@ -1,0 +1,447 @@
+import os
+import json
+import logging
+import re
+from math import sqrt
+from datetime import datetime
+from itertools import permutations
+from typing import Dict, List, Tuple, Any
+
+import networkx as nx
+import matplotlib.pyplot as plt
+
+from kivy.app import App
+from kivy.lang import Builder
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.image import Image
+from kivy.uix.popup import Popup
+from kivy.uix.scatter import Scatter
+from kivy.core.window import Window
+from kivy.properties import StringProperty
+
+# Configure logging and Kivy soft input mode
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+Window.softinput_mode = "below_target"
+
+# Fixed mapping for digits 0-9.
+# Note: Changed digit "8" to use coral (#ff7f50).
+DIGIT_COLOR_MAP = {
+    "0": "#e6194b",
+    "1": "#3cb44b",
+    "2": "#ffe119",
+    "3": "#0082c8",
+    "4": "#f58231",
+    "5": "#911eb4",
+    "6": "#46f0f0",
+    "7": "#f032e6",
+    "8": "#ff7f50",  # Changed from "#d2f53c" to "#ff7f50"
+    "9": "#fabebe",
+}
+
+KV = '''
+<Header@BoxLayout>:
+    size_hint_y: None
+    height: "60dp"
+    padding: "10dp"
+    spacing: "10dp"
+    canvas.before:
+        Color:
+            rgba: 0.12, 0.45, 0.78, 1
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    Label:
+        text: "Surreal Chat"
+        color: 1, 1, 1, 1
+        font_size: "20sp"
+        bold: True
+
+<ChatBubble>:
+    size_hint_y: None
+    height: self.minimum_height
+    padding: "8dp"
+    canvas.before:
+        Color:
+            rgba: (0.9, 0.9, 1, 1) if root.sender == "user" else (0.8, 1, 0.8, 1)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [10,]
+    Label:
+        # Prepend an invisible dummy markup tag so that if the text begins with a [color] tag it gets parsed properly.
+        text: "[color=ffffff][size=0] [/size][/color]" + root.text
+        markup: True
+        color: 0, 0, 0, 1
+        text_size: self.width - dp(20), None
+        size_hint_y: None
+        height: self.texture_size[1]
+
+<MainScreen>:
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, 1
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    orientation: "vertical"
+    spacing: "10dp"
+    padding: "10dp"
+    
+    Header:
+
+    ScrollView:
+        id: scroll_view
+        GridLayout:
+            id: chat_layout
+            cols: 1
+            size_hint_y: None
+            spacing: "10dp"
+            padding: "10dp"
+            height: self.minimum_height
+
+    BoxLayout:
+        size_hint_y: None
+        height: "50dp"
+        spacing: "10dp"
+        TextInput:
+            id: input_text
+            hint_text: "Type your message..."
+            multiline: False
+            size_hint_x: 0.7
+            background_normal: ""
+            background_color: 1, 1, 1, 1
+            foreground_color: 0, 0, 0, 1
+            padding: "10dp"
+        Button:
+            text: "Send"
+            size_hint_x: 0.3
+            background_color: 0.1, 0.6, 0.2, 1
+            on_release: app.handle_message()
+    
+    BoxLayout:
+        size_hint_y: None
+        height: "50dp"
+        spacing: "10dp"
+        Label:
+            text: "Save Graphs"
+            size_hint_x: 0.6
+            color: 0.1, 0.1, 0.1, 1
+        Switch:
+            id: graph_toggle
+            active: True
+            on_active: app.toggle_graph_saving(self.active)
+
+MainScreen:
+'''
+
+class ChatBubble(BoxLayout):
+    sender = StringProperty("")  # "user" or "bot"
+    text = StringProperty("")
+
+class MainScreen(BoxLayout):
+    pass
+
+def colorize_digits(text: str) -> str:
+    """
+    Wrap every digit (0-9) with its fixed color using Kivy markup.
+    Non-digit characters remain unwrapped.
+    """
+    def repl(match: re.Match) -> str:
+        digit = match.group(0)
+        color = DIGIT_COLOR_MAP.get(digit, "black")
+        return f"[color={color}]{digit}[/color]"
+    return re.sub(r'\d', repl, text)
+
+class SurrealChatApp(App):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.save_graph: bool = True  # Toggle for saving graphs and data
+
+    def build(self) -> BoxLayout:
+        return Builder.load_string(KV)
+
+    def toggle_graph_saving(self, active: bool) -> None:
+        self.save_graph = active
+        logger.info("Graph saving toggled: %s", active)
+
+    def handle_message(self) -> None:
+        screen = self.root
+        chat_layout = screen.ids.chat_layout
+        input_text = screen.ids.input_text
+        message: str = input_text.text.strip()
+
+        if not message:
+            self.add_message_to_chat("Bot: Please enter a valid input.", sender="bot")
+            return
+
+        # Colorize digits in the user message.
+        self.add_message_to_chat(f"You: {colorize_digits(message)}", sender="user")
+
+        try:
+            (response, main_graph, surreal_nodes, ascii_sum, partition_expressions,
+             total_ratio, ratio_graph, image_path, ratio_image_path) = self.process_message(message)
+
+            partition_info = "\n".join(partition_expressions)
+            bot_response = (
+                f"Bot Response:\n"
+                f"{response}\n\n"
+                f"Sum of Ratios: {total_ratio:.12f}\n"
+                f"Ratio Partition Expressions:\n{partition_info}\n\n"
+                f"Graphs & data saved in Documents folder."
+            )
+            # Colorize digits in the bot message.
+            self.add_message_to_chat(colorize_digits(bot_response), sender="bot")
+
+            if self.save_graph:
+                self.visualize_graph(main_graph, image_path)
+                self.visualize_ratio_graph(ratio_graph, ratio_image_path)
+                self.save_graph_data(surreal_nodes, message)
+                self.add_image_to_chat(image_path)
+                self.add_image_to_chat(ratio_image_path)
+        except Exception as e:
+            logger.exception("Error processing message:")
+            self.add_message_to_chat(f"Bot: Error occurred - {e}", sender="bot")
+
+        input_text.text = ""
+
+    def add_message_to_chat(self, text: str, sender: str) -> None:
+        bubble = ChatBubble(sender=sender, text=text)
+        self.root.ids.chat_layout.add_widget(bubble)
+        self.root.ids.scroll_view.scroll_y = 0
+
+    def add_image_to_chat(self, image_path: str) -> None:
+        chat_layout = self.root.ids.chat_layout
+        img = Image(source=image_path, size_hint=(1, None), allow_stretch=True, keep_ratio=True)
+
+        def update_image_size(*args: Any) -> None:
+            if img.texture:
+                try:
+                    tw, th = img.texture_size
+                except Exception:
+                    return
+                chat_width = chat_layout.width
+                aspect = th / tw if tw else 1
+                img.width = chat_width
+                img.height = chat_width * aspect
+
+        img.bind(on_texture=update_image_size, size=update_image_size)
+
+        # Use a proper touch handler function instead of a lambda.
+        def on_touch_down_handler(inst, touch):
+            if inst.collide_point(touch.x, touch.y):
+                self.show_zoomed_image(image_path)
+                return True
+            return False
+        img.bind(on_touch_down=on_touch_down_handler)
+
+        self.root.ids.chat_layout.add_widget(img)
+        self.root.ids.scroll_view.scroll_y = 0
+
+    def show_zoomed_image(self, image_path: str) -> None:
+        popup = Popup(title="Graph Image", size_hint=(0.95, 0.95), auto_dismiss=True)
+        scatter = Scatter(size_hint=(None, None), do_scale=True, do_translation_x=True,
+                          do_translation_y=True, scale=1.0, scale_min=1.0, scale_max=10.0)
+        zoom_img = Image(source=image_path, allow_stretch=True, keep_ratio=True, size_hint=(None, None))
+
+        def on_texture(*_args: Any) -> None:
+            if zoom_img.texture:
+                try:
+                    tw, th = zoom_img.texture_size
+                except Exception:
+                    return
+                scatter.size = (tw, th)
+                zoom_img.size = (tw, th)
+                max_w = popup.width * 0.95
+                max_h = popup.height * 0.8
+                fit_scale = min(max_w / tw, max_h / th) if (tw and th) else 1
+                if fit_scale < 1.0:
+                    scatter.scale = fit_scale
+
+        zoom_img.bind(on_texture=on_texture)
+        scatter.add_widget(zoom_img)
+        popup.add_widget(scatter)
+        popup.open()
+
+    def process_message(self, message: str) -> Tuple[str, nx.DiGraph, Dict[Any, Dict[str, Any]], int, List[str], float, nx.DiGraph, str, str]:
+        """
+        Process the input message by:
+          1. Converting characters to ASCII and computing surreal transitions.
+          2. Building a main graph with nodes (character, square root, square).
+          3. Computing the ASCII sum (in both decimal and binary).
+          4. Generating ratio partition expressions from the ASCII sum and summing them.
+          5. Creating a ratio graph from these expressions.
+          6. Returning all generated data along with file paths for saved graphs.
+        """
+        ascii_values: List[int] = [ord(c) for c in message]
+        # Build surreal_nodes with additional info per character.
+        surreal_nodes: Dict[int, Dict[str, Any]] = {
+            val: {
+                "char": chr(val),
+                "ascii": val,
+                "binary": bin(val),
+                "sqrt": sqrt(val),
+                "square": val ** 2
+            }
+            for val in ascii_values
+        }
+
+        main_graph: nx.DiGraph = self.build_main_graph(surreal_nodes)
+        ascii_sum: int = sum(ascii_values)
+        ascii_sum_binary: str = bin(ascii_sum)
+        partition_expressions, total_ratio = self.calculate_ratio_partitions(ascii_sum)
+        ratio_graph: nx.DiGraph = self.create_ratio_graph(partition_expressions)
+
+        response: str = (
+            f"Input Message: {message}\n\n"
+            f"ASCII Values: {ascii_values}\n"
+            f"ASCII Sum: {ascii_sum} (Binary: {ascii_sum_binary})\n\n"
+            f"Surreal Nodes (JSON):\n{json.dumps(surreal_nodes, indent=4)}"
+        )
+        sanitized = self.sanitize_filename(message)
+        image_path: str = os.path.join(self.get_documents_dir(),
+                                       f"graph_{sanitized}_{self.get_timestamp()}.png")
+        ratio_image_path: str = os.path.join(self.get_documents_dir(),
+                                             f"ratio_graph_{sanitized}_{self.get_timestamp()}.png")
+        return (response, main_graph, surreal_nodes, ascii_sum, partition_expressions,
+                total_ratio, ratio_graph, image_path, ratio_image_path)
+
+    def build_main_graph(self, surreal_nodes: Dict[Any, Dict[str, Any]]) -> nx.DiGraph:
+        """
+        Build the main directed graph with nodes and edges based on surreal transitions.
+        """
+        graph = nx.DiGraph()
+        for ascii_val, data in surreal_nodes.items():
+            sqrt_val = data["sqrt"]
+            square_val = data["square"]
+            char = data["char"]
+            graph.add_node(ascii_val, label=char, value=ascii_val)
+            graph.add_node(sqrt_val, label=f"{sqrt_val:.12f}", value=sqrt_val)
+            graph.add_node(square_val, label=f"{square_val}", value=square_val)
+            graph.add_edge(ascii_val, sqrt_val, label=f"sqrt({ascii_val})={sqrt_val:.12f}")
+            graph.add_edge(ascii_val, square_val, label=f"{ascii_val}^2={square_val}")
+            graph.add_edge(sqrt_val, square_val, label=f"{sqrt_val:.12f}→{square_val}")
+            graph.add_edge(square_val, sqrt_val, label=f"{square_val}→{sqrt_val:.12f}")
+        return graph
+
+    def calculate_ratio_partitions(self, ascii_sum: int) -> Tuple[List[str], float]:
+        """
+        Generate unique ratio partition expressions from the ascii_sum.
+        Each expression is built by permuting the digits of ascii_sum and splitting them.
+        Returns a sorted list of expression strings and the sum of all unique ratio values.
+        """
+        ascii_str: str = str(ascii_sum)
+        n: int = len(ascii_str)
+        expressions: Dict[str, float] = {}
+        for perm in set(''.join(p) for p in permutations(ascii_str)):
+            for pos in range(1, n):
+                num, den = perm[:pos], perm[pos:]
+                if int(den) == 0:
+                    continue
+                value = int(num) / int(den)
+                expr = f"{num}/{den} = {value:.12f}"
+                expressions[expr] = value
+        sorted_expressions = sorted(expressions.keys())
+        total_ratio = sum(expressions.values())
+        return sorted_expressions, total_ratio
+
+    def create_ratio_graph(self, expressions: List[str]) -> nx.DiGraph:
+        """
+        Creates a directed graph where each node is a ratio partition expression.
+        Nodes are sequentially linked.
+        """
+        g = nx.DiGraph()
+        for i, expr in enumerate(expressions):
+            node_key = str(i)
+            g.add_node(node_key, label=expr)
+            if i > 0:
+                g.add_edge(str(i - 1), node_key, label="next")
+        return g
+
+    def visualize_graph(self, graph: nx.DiGraph, image_path: str) -> None:
+        """
+        Visualizes the main graph using matplotlib and saves the image.
+        Digit nodes use their fixed background color; non-digit nodes are light blue.
+        """
+        pos = nx.spring_layout(graph, k=0.5, seed=42)
+        labels = nx.get_node_attributes(graph, "label")
+        node_values = nx.get_node_attributes(graph, "value")
+        edge_labels = nx.get_node_attributes(graph, "label")
+
+        node_colors = []
+        font_colors = {}
+        for node in graph.nodes():
+            label_val = str(labels.get(node, ""))
+            if label_val.isdigit() and label_val in DIGIT_COLOR_MAP:
+                node_colors.append(DIGIT_COLOR_MAP[label_val])
+                font_colors[node] = "black"
+            else:
+                node_colors.append("lightblue")
+                font_colors[node] = "black"
+
+        plt.figure(figsize=(12, 8))
+        nx.draw(graph, pos, with_labels=True, labels=labels,
+                node_color=node_colors, edge_color="gray")
+        for node, value in node_values.items():
+            coords = pos.get(node)
+            if coords and len(coords) >= 2:
+                x, y = float(coords[0]), float(coords[1])
+                plt.text(x, y + 0.05, str(value), fontsize=9,
+                         color=font_colors.get(node, "black"), ha="center")
+        nx.draw_networkx_edge_labels(graph, pos, edge_labels=edge_labels, font_color="red")
+        plt.title("Surreal Digits Graph - ASCII & Transitions")
+        plt.tight_layout()
+        plt.savefig(image_path)
+        plt.close()
+
+    def visualize_ratio_graph(self, ratio_graph: nx.DiGraph, image_path: str) -> None:
+        """
+        Visualizes the ratio partition graph and saves the image.
+        """
+        pos = nx.spring_layout(ratio_graph, k=0.5, seed=42)
+        labels = nx.get_node_attributes(ratio_graph, "label")
+        edge_labels = nx.get_node_attributes(ratio_graph, "label")
+        plt.figure(figsize=(8, 6))
+        nx.draw(ratio_graph, pos, with_labels=True, labels=labels,
+                node_color="lightgreen", edge_color="gray")
+        nx.draw_networkx_edge_labels(ratio_graph, pos, edge_labels=edge_labels, font_color="blue")
+        plt.title("Ratio Partition Graph - Sequential Linking")
+        plt.tight_layout()
+        plt.savefig(image_path)
+        plt.close()
+
+    def save_graph_data(self, nodes: Dict[Any, Dict[str, Any]], user_message: str) -> None:
+        """
+        Saves the surreal nodes (graph data) as a JSON file.
+        """
+        sanitized = self.sanitize_filename(user_message)
+        filename = f"data_{sanitized}_{self.get_timestamp()}.json"
+        data_dir = self.get_documents_dir()
+        os.makedirs(data_dir, exist_ok=True)
+        file_path = os.path.join(data_dir, filename)
+        with open(file_path, "w") as file:
+            json.dump(nodes, file, indent=4)
+
+    @staticmethod
+    def sanitize_filename(filename: str) -> str:
+        """
+        Return a sanitized filename allowing only alphanumeric characters, spaces, or underscores.
+        """
+        return "".join(c if c.isalnum() or c in (" ", "_") else "_" for c in filename)
+
+    @staticmethod
+    def get_timestamp() -> str:
+        """
+        Return a timestamp string formatted as YYYYMMDD_HHMMSS.
+        """
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    @staticmethod
+    def get_documents_dir() -> str:
+        """
+        Return the directory to save graphs and data (using the current working directory).
+        """
+        return os.getcwd()
+
+if __name__ == "__main__":
+    SurrealChatApp().run()
